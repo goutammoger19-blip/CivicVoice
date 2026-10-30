@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function admin() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid || admin();
+      allow create, update, delete: if false;
+    }
+    match /suggestions/{id} {
+      allow read: if true;
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasAll(['uid','title','category','area','description','priority','emergency','imageUrl','status','likes','createdAt','updatedAt','adminReply'])
+        && request.resource.data.title is string && request.resource.data.title.size() > 0 && request.resource.data.title.size() <= 100
+        && request.resource.data.description is string && request.resource.data.description.size() > 0 && request.resource.data.description.size() <= 2000
+        && request.resource.data.area is string && request.resource.data.area.size() <= 120
+        && request.resource.data.status == 'Pending' && request.resource.data.likes == 0
+        && request.resource.data.priority in ['Normal','High','Urgent'];
+      allow update: if admin() || (signedIn() && resource.data.uid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt']))
+        || (signedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes'])
+        && request.resource.data.likes == resource.data.likes + 1
+        && existsAfter(/databases/$(database)/documents/suggestions/$(id)/supports/$(request.auth.uid)));
+      allow delete: if admin();
+      match /supports/{uid} {
+        allow read: if signedIn() && request.auth.uid == uid || admin();
+        allow create: if signedIn() && request.auth.uid == uid && request.resource.data.uid == uid && !exists(/databases/$(database)/documents/suggestions/$(id)/supports/$(uid));
+        allow update, delete: if false;
+      }
+    }
+    match /notifications/{id} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid || admin();
+      allow create: if admin() && request.resource.data.uid is string;
+      allow update, delete: if admin();
+    }
+  }
+}
